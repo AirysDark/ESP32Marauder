@@ -1,0 +1,108 @@
+name: AirysDark-AI - Detector (bootstrap)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (no credentials)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Fetch tools ONLY here (per your design). The generated PROBE/BUILD flows won’t fetch again.
+      - name: Fetch tools.tar (ONLY here)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p tools
+          curl -fL "https://raw.githubusercontent.com/AirysDark-AI/AirysDark-AI_builder/main/tools/tools.tar" -o /tmp/tools.tar
+          tar -xvf /tmp/tools.tar -C tools
+          ls -la tools
+
+      - name: Run detector (writes scan.json + AirysDark-AI_prob.yml)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 tools/AirysDark-AI_detector.py
+          test -f tools/airysdark_ai_scan.json
+          test -f .github/workflows/AirysDark-AI_prob.yml
+
+      - name: Build PR body (detector results)
+        id: body
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # ensure jq exists
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
+          {
+            echo "### AirysDark-AI: detector results"
+            echo
+          } > pr_body.md
+
+          if [ -f tools/airysdark_ai_scan.json ]; then
+            types_count=$(jq -r '.types // [] | length' tools/airysdark_ai_scan.json)
+            if [ "$types_count" != "0" ]; then
+              echo "**Detected build types:**" >> pr_body.md
+              while IFS= read -r t; do
+                echo "- ${t}" >> pr_body.md
+                jq -r --arg t "$t" '.evidence[$t] // [] | .[:6][] | "  - " + .' tools/airysdark_ai_scan.json >> pr_body.md
+              done < <(jq -r '.types[]' tools/airysdark_ai_scan.json)
+            else
+              echo "_No build types detected._" >> pr_body.md
+            fi
+          else
+            echo "_No detector JSON found (tools/airysdark_ai_scan.json)._"
+          fi >> pr_body.md
+
+          {
+            echo
+            echo "**Next steps:**"
+            echo "1. Edit \`.github/workflows/AirysDark-AI_prob.yml\` and set \`env.TARGET\` to the build you want (e.g. \`android\`, \`linux\`, \`cmake\`)."
+            echo "2. Merge this PR."
+            echo "3. From the Actions tab, manually run **AirysDark-AI - Probe (LLM builds workflow)**."
+          } >> pr_body.md
+
+          echo "PR_BODY_PATH=pr_body.md" >> "$GITHUB_OUTPUT"
+
+      - name: Stage detector outputs
+        id: diff
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # PR creation uses BOT_TOKEN. (KB_PUSH_TOKEN is only used later by probe/build workflows.)
+      - name: Open PR with PROBE workflow
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.BOT_TOKEN }}
+          branch: ai/airysdark-ai-prob
+          commit-message: "chore: add AirysDark-AI_prob.yml + tools (bootstrap)"
+          title: "AirysDark-AI: add single PROBE workflow + tools"
+          body-path: ${{ steps.body.outputs.PR_BODY_PATH }}
+          labels: automation, ci
