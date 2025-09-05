@@ -1,0 +1,161 @@
+    name: AirysDark-AI - Probe (LLM builds workflow)
+
+    on:
+      workflow_dispatch: {}
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    # Set TARGET to one of the detected types: android, linux, cmake, node, python, rust, dotnet, maven, flutter, go
+    env:
+      TARGET: "__SET_ME__"
+      # Optional: central KB collection repo to receive snapshots (owner/repo)
+      KB_COLLECTION_REPO: "AirysDark-AI/ai-kb-collection"
+
+    jobs:
+      probe:
+        runs-on: ubuntu-latest
+        steps:
+          - name: Guard: require manual confirmation
+          if: ${{ github.event_name == 'workflow_dispatch' }}
+          run: |
+            if [ "${{ inputs.confirm }}" != "YES" ]; then
+            echo "Refusing to run: inputs.confirm must be YES"; exit 1
+            fi
+
+         - name: Guard: default branch only
+         run: |
+           if [ "${{ github.ref }}" != "refs/heads/$
+{{ github.event.repository.default_branch }}" ]; then
+            echo "This workflow only runs on the default branch."; exit 1
+           fi
+
+          - name: Checkout (no credentials)
+            uses: actions/checkout@v4
+            with:
+              fetch-depth: 0
+              persist-credentials: false
+
+          - name: Setup Python
+            uses: actions/setup-python@v5
+            with:
+              python-version: "3.11"
+
+          # ===== AI KB: Restore local cache =====
+          - name: Restore AI KB cache
+            uses: actions/cache@v4
+            with:
+              path: tools/ai_kb
+              key: ai-kb-${{ github.repository }}-v1
+
+          - name: Verify tools exist (added by detector PR)
+            shell: bash
+            run: |
+              set -euxo pipefail
+              test -f tools/AirysDark-AI_prob.py
+              test -f tools/AirysDark-AI_builder.py
+              ls -la tools
+              echo "TARGET=$TARGET"
+
+          - name: Run repo probe (AI-assisted)
+            shell: bash
+            env:
+              TARGET: ${{ env.TARGET }}
+              OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # optional
+              OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4o-mini' }}
+            run: |
+              set -euxo pipefail
+              python3 tools/AirysDark-AI_prob.py
+
+          - name: Upload probe artifacts
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: airysdark-ai-probe-artifacts
+              if-no-files-found: warn
+              retention-days: 7
+              path: |
+                tools/airysdark_ai_prob_report.json
+                tools/airysdark_ai_prob_report.log
+                tools/airysdark_ai_build_ai_response.txt
+                pr_body_build.md
+                .github/workflows/AirysDark-AI_build.yml
+
+          # ===== AI KB: Upload as artifact =====
+          - name: Upload AI KB (artifact)
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: ai-kb
+              path: tools/ai_kb/**
+              if-no-files-found: warn
+              retention-days: 30
+
+          # ===== AI KB: Save cache back =====
+          - name: Save AI KB cache
+            if: always()
+            uses: actions/cache/save@v4
+            with:
+              path: tools/ai_kb
+              key: ai-kb-${{ github.repository }}-v1
+
+          # ===== AI KB: Push snapshot to central collection repo (optional) =====
+          - name: Push KB snapshot to central collection repo
+            if: always() && env.KB_COLLECTION_REPO != '' && secrets.KB_PUSH_TOKEN != ''
+            shell: bash
+            run: |
+              set -euxo pipefail
+              if [ ! -s tools/ai_kb/knowledge.jsonl ]; then
+                echo "No knowledge.jsonl to push; skipping."
+                exit 0
+              fi
+              OWNER_REPO="${GITHUB_REPOSITORY}"
+              OWNER="${OWNER_REPO%%/*}"
+              REPO="${OWNER_REPO#*/}"
+              TS="$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
+              WORKDIR="$(mktemp -d)"
+              git config --global user.name "airysdark-ai-bot"
+              git config --global user.email "airysdark-ai-bot@users.noreply.github.com"
+              git clone "https://x-access-token:${{ secrets.KB_PUSH_TOKEN }}@github.com/${{ env.KB_COLLECTION_REPO }}.git" "$WORKDIR/kb"
+              cd "$WORKDIR/kb"
+              mkdir -p "${OWNER}/${REPO}/snapshots"
+              cp -f "$GITHUB_WORKSPACE/tools/ai_kb/knowledge.jsonl" "${OWNER}/${REPO}/knowledge.jsonl"
+              cp -f "$GITHUB_WORKSPACE/tools/ai_kb/knowledge.jsonl" "${OWNER}/${REPO}/snapshots/${TS}.jsonl"
+              {
+                echo "repo: ${OWNER_REPO}"
+                echo "run_id: ${GITHUB_RUN_ID}"
+                echo "run_url: https://github.com/${OWNER_REPO}/actions/runs/${GITHUB_RUN_ID}"
+                echo "ref: ${GITHUB_REF}"
+                echo "timestamp: ${TS}"
+              } > "${OWNER}/${REPO}/snapshots/${TS}.meta"
+              git add -A
+              if git diff --cached --quiet; then
+                echo "No KB changes to push."
+                exit 0
+              fi
+              git commit -m "KB snapshot: ${OWNER_REPO} @ ${TS}"
+              git push origin HEAD:main
+
+          - name: Stage generated build workflow
+            id: diff
+            shell: bash
+            run: |
+              set -euxo pipefail
+              git add -A
+              if git diff --cached --quiet; then
+                echo "changed=false" >> "$GITHUB_OUTPUT"
+              else:
+                echo "changed=true" >> "$GITHUB_OUTPUT"
+              fi
+
+          - name: Open PR with generated build workflow
+            if: steps.diff.outputs.changed == 'true'
+            uses: peter-evans/create-pull-request@v6
+            with:
+              token: ${{ secrets.BOT_TOKEN }}
+              branch: ai/airysdark-ai-build
+              commit-message: "chore: add AirysDark-AI_build.yml (from probe)"
+              title: "AirysDark-AI: add build workflow (from probe)"
+              body-path: pr_body_build.md
+              labels: automation, ci
