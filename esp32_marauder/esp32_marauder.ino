@@ -222,12 +222,12 @@ void setup()
 
   #ifdef HAS_SCREEN
     #ifndef MARAUDER_CARDPUTER
-      display_obj.tft.drawCentreString("ESP32 Marauder", TFT_WIDTH/2, TFT_HEIGHT * 0.33, 1);
-      display_obj.tft.drawCentreString("JustCallMeKoko", TFT_WIDTH/2, TFT_HEIGHT * 0.5, 1);
+      display_obj.tft.drawCentreString("WhiteHat Secure", TFT_WIDTH/2, TFT_HEIGHT * 0.33, 1);
+      display_obj.tft.drawCentreString("AirysDark", TFT_WIDTH/2, TFT_HEIGHT * 0.5, 1);
       display_obj.tft.drawCentreString(display_obj.version_number, TFT_WIDTH/2, TFT_HEIGHT * 0.66, 1);
     #else
-      display_obj.tft.drawCentreString("ESP32 Marauder", TFT_HEIGHT/2, TFT_WIDTH * 0.33, 1);
-      display_obj.tft.drawCentreString("JustCallMeKoko", TFT_HEIGHT/2, TFT_WIDTH * 0.5, 1);
+      display_obj.tft.drawCentreString("WhiteHat Secure", TFT_HEIGHT/2, TFT_WIDTH * 0.33, 1);
+      display_obj.tft.drawCentreString("AirysDark", TFT_HEIGHT/2, TFT_WIDTH * 0.5, 1);
       display_obj.tft.drawCentreString(display_obj.version_number, TFT_HEIGHT/2, TFT_WIDTH * 0.66, 1);
     #endif
   #endif
